@@ -1067,7 +1067,25 @@ class ShopifyChecker:
                 "number"
             ] = phone
 
-            await self.session.post(graphql_url, json=delivery_json, headers=headers)
+            delivery_resp = await self.session.post(graphql_url, json=delivery_json, headers=headers)
+            try:
+                import json as _dj
+                dr = _dj.loads(await delivery_resp.text())
+                # Re-read running_total from the delivery negotiate response
+                new_rt = (
+                    dr.get("data", {})
+                    .get("session", {})
+                    .get("negotiate", {})
+                    .get("result", {})
+                    .get("sellerProposal", {})
+                    .get("runningTotal", {})
+                    .get("value", {})
+                    .get("amount")
+                )
+                if new_rt:
+                    running_total = new_rt
+            except Exception:
+                pass
 
             formatted_card = " ".join([cc[i : i + 4] for i in range(0, len(cc), 4)])
             token_payload = {
@@ -1298,20 +1316,18 @@ class ShopifyChecker:
                     if m:
                         new_total = m.group(1)
 
-                if new_total and new_total != running_total:
-                    # Patch both the payment line and the outer totalAmount
+                # Use new total if found; otherwise retry with current total as-is
+                if new_total:
                     running_total = new_total
-                    completion_json["variables"]["input"]["payment"]["paymentLines"][0][
-                        "amount"
-                    ]["value"]["amount"] = running_total
-                    # retry
-                    resp2 = await self.session.post(
-                        graphql_url, json=completion_json, headers=headers
-                    )
-                    text = await resp2.text()
-                    if "Your order total has changed." in text:
-                        return False, "Site not supported - Total changed", {}
-                else:
+                completion_json["variables"]["input"]["payment"]["paymentLines"][0][
+                    "amount"
+                ]["value"]["amount"] = running_total
+                # One retry with the corrected/current total
+                resp2 = await self.session.post(
+                    graphql_url, json=completion_json, headers=headers
+                )
+                text = await resp2.text()
+                if "Your order total has changed." in text:
                     return False, "Site not supported - Total changed", {}
 
             if "The requested payment method is not available." in text:
