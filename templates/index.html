@@ -666,9 +666,10 @@
     if (statusEl) { statusEl.textContent = '⟳ Fetching countries...'; statusEl.style.color = '#888'; }
 
     try {
+      const proxy = document.getElementById('proxy-input').value.trim();
       const res = await apiFetch('/site_countries', {
         method: 'POST',
-        body: JSON.stringify({ site })
+        body: JSON.stringify({ site, proxy: proxy || null })
       });
       const data = await res.json();
 
@@ -866,9 +867,10 @@
     }
 
     try {
+      const proxy = document.getElementById('proxy-input').value.trim();
       const res = await apiFetch('/site_products', {
         method: 'POST',
-        body: JSON.stringify({site})
+        body: JSON.stringify({site, proxy: proxy || null})
       });
       const data = await res.json();
 
