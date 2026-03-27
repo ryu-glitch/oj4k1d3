@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus Checker</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #141414;
+    color: #ccc;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 13px;
+    min-height: 100vh;
+  }
+  .top-grid {
+    display: grid;
+    grid-template-columns: 260px 1fr 300px;
+    gap: 12px;
+    padding: 12px;
+  }
+  .panel {
+    background: #1c1c1c;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    padding: 12px;
+  }
+  .panel-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #bbb;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #2a2a2a;
+  }
+  input, textarea, select {
+    width: 100%;
+    background: #111;
+    border: 1px solid #2a2a2a;
+    color: #ccc;
+    border-radius: 4px;
+    padding: 7px 9px;
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+    resize: vertical;
+  }
+  input:focus, textarea:focus, select:focus {
+    border-color: #00bcd4;
+  }
+  input::placeholder, textarea::placeholder {
+    color: #555;
+  }
+  .row2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .mt6 { margin-top: 6px; }
+  .btn {
+    width: 100%;
+    padding: 8px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: opacity 0.2s, background 0.2s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: #2a2a2a; color: #ccc; border: 1px solid #3a3a3a; }
+  .btn-cyan { background: #00bcd4; color: #000; }
+  .btn-green { background: #2a2a2a; color: #ccc; border: 1px solid #3a3a3a; }
+  .proxy-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 6px;
+    align-items: center;
+  }
+  .proxy-row .btn { width: auto; padding: 7px 14px; }
+  .stats-row {
+    display: flex;
+    gap: 14px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #2a2a2a;
+    font-size: 12px;
+    color: #888;
+  }
+  .stat-item span { color: #00bcd4; font-weight: 700; }
+  .result-section {
+    margin: 0 12px 8px;
+    background: #1c1c1c;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .result-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #1c1c1c;
+  }
+  .result-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #bbb;
+    min-width: 36px;
+  }
+  .result-label.cvv-lbl { color: #4fc3f7; }
+  .result-label.ccn-lbl { color: #81c784; }
+  .result-label.dead-lbl { color: #e57373; }
+  .btn-sm {
+    padding: 3px 10px;
+    border: 1px solid #333;
+    border-radius: 3px;
+    background: #252525;
+    color: #aaa;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .btn-sm:hover { background: #333; }
+  .result-body {
+    display: none;
+    padding: 6px 12px 10px;
+    max-height: 160px;
+    overflow-y: auto;
+  }
+  .result-body.visible { display: block; }
+  .result-body pre {
+    font-size: 11px;
+    color: #aaa;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.6;
+  }
+  .result-item {
+    padding: 3px 0;
+    border-bottom: 1px solid #222;
+    font-size: 11px;
+  }
+  .result-item.live { color: #81c784; }
+  .result-item.dead { color: #e57373; }
+  .spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid #333;
+    border-top-color: #00bcd4;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .status-bar {
+    padding: 0 12px 8px;
+    font-size: 11px;
+    color: #666;
+    min-height: 20px;
+  }
+  .status-bar.active { color: #00bcd4; }
+  .status-bar.error { color: #e57373; }
+
+  /* Shipping address section */
+  .addr-section-title {
+    font-size: 11px;
+    color: #888;
+    margin-top: 10px;
+    margin-bottom: 6px;
+    padding-top: 8px;
+    border-top: 1px solid #2a2a2a;
+    letter-spacing: 0.3px;
+  }
+
+  /* Product modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal {
+    background: #1c1c1c;
+    border: 1px solid #333;
+    border-radius: 8px;
+    width: 520px;
+    max-width: 95vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid #2a2a2a;
+  }
+  .modal-header h3 { font-size: 14px; color: #ccc; }
+  .modal-close {
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 18px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .modal-close:hover { color: #ccc; }
+  .modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 16px;
+  }
+  .product-item {
+    padding: 8px 10px;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .product-item:hover { background: #252525; border-color: #00bcd4; }
+  .product-item.selected { background: #002830; border-color: #00bcd4; }
+  .product-item .p-title { font-size: 12px; color: #ccc; }
+  .product-item .p-price { font-size: 12px; color: #00bcd4; font-weight: 600; }
+  .product-item .p-avail { font-size: 10px; color: #888; margin-top: 2px; }
+  .modal-footer {
+    padding: 10px 16px;
+    border-top: 1px solid #2a2a2a;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .modal-footer .btn { width: auto; padding: 7px 20px; }
+  .selected-product-info {
+    margin-top: 6px;
+    padding: 5px 8px;
+    background: #002830;
+    border: 1px solid #00bcd4;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #00bcd4;
+    display: none;
+  }
+  .selected-product-info.visible { display: block; }
+  .user-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 14px;
+    background: #0a0a0a;
+    border-bottom: 1px solid #1a1a1a;
+    font-size: 11px;
+  }
+  .user-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #aaa;
+  }
+  .user-bar-name {
+    color: #00bcd4;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .user-bar-expiry {
+    color: #666;
+  }
+  .user-bar-expiry.warning { color: #ff9800; }
+  .user-bar-expiry.critical { color: #e57373; }
+  .user-bar-key {
+    color: #333;
+    font-family: monospace;
+    font-size: 10px;
+  }
+  .user-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .btn-logout {
+    background: none;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    color: #555;
+    font-size: 10px;
+    padding: 3px 10px;
+    cursor: pointer;
+    transition: color .2s, border-color .2s;
+    letter-spacing: 0.5px;
+  }
+  .btn-logout:hover { color: #e57373; border-color: #e57373; }
+  .bottom-bar {
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 12px 12px;
+  }
+  .btn-check-site {
+    background: #00bcd4;
+    color: #000;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 18px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  .btn-check-site:hover { opacity: 0.85; }
+  .loading-products {
+    text-align: center;
+    padding: 20px;
+    color: #888;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<!-- User info bar -->
+<div class="user-bar" id="user-bar" style="display:none;">
+  <div class="user-bar-left">
+    <span>Welcome, <span class="user-bar-name" id="ubar-name">—</span></span>
+    <span class="user-bar-key" id="ubar-key"></span>
+    <span class="user-bar-expiry" id="ubar-expiry"></span>
+  </div>
+  <div class="user-bar-right">
+    <a href="/logout"><button class="btn-logout">Logout</button></a>
+  </div>
+</div>
+
+<div class="top-grid">
+  <!-- LEFT: Card Generator -->
+  <div class="panel">
+    <div class="panel-title">Card Generator</div>
+
+    <textarea id="gen-bin" placeholder="Bin" rows="2" style="margin-bottom:6px;"></textarea>
+
+    <div class="row2">
+      <input id="gen-month" placeholder="Month" maxlength="2">
+      <input id="gen-year" placeholder="Year" maxlength="4">
+    </div>
+
+    <textarea id="gen-cvv" placeholder="xxx" rows="1" style="margin-top:6px;"></textarea>
+    <textarea id="gen-amount" placeholder="Amount (default 10)" rows="1" style="margin-top:6px;"></textarea>
+
+    <button class="btn btn-primary mt6" onclick="generateCards()">Generate</button>
+
+    <!-- Billing info note -->
+    <div class="addr-section-title" style="margin-top:10px;">Billing Address <span style="font-size:10px;color:#888;">(locked)</span></div>
+    <div style="font-size:10px;color:#666;background:#1a1a1a;border:1px solid #333;border-radius:4px;padding:6px 8px;line-height:1.7;">
+      Ella Anderson · 42 Canal Street<br>New Orleans, LA 70130, US
+    </div>
+
+    <!-- Optional Shipping Address -->
+    <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+      <input type="checkbox" id="custom-ship-toggle" style="width:14px;height:14px;cursor:pointer;" onchange="toggleShippingFields()">
+      <label for="custom-ship-toggle" style="font-size:11px;color:#aaa;cursor:pointer;user-select:none;">Custom Shipping Address (optional)</label>
+    </div>
+
+    <div id="shipping-fields" style="display:none;margin-top:8px;">
+      <input id="ship-name" placeholder="Full Name" style="margin-bottom:6px;">
+      <input id="ship-street" placeholder="Street Address" style="margin-bottom:6px;">
+      <div class="row2" style="margin-bottom:6px;">
+        <input id="ship-city" placeholder="City">
+        <select id="ship-state">
+          <option value="">State/Province</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+        <span style="font-size:10px;color:#555;">Country</span>
+        <span id="country-fetch-status" style="font-size:10px;color:#555;"></span>
+      </div>
+      <div class="row2" style="margin-bottom:6px;">
+        <input id="ship-zip" placeholder="Postal Code" maxlength="10">
+        <select id="ship-country" onchange="updateShipStateDropdown(this.value)">
+          <option value="US">🇺🇸 United States</option>
+          <option value="CA">🇨🇦 Canada</option>
+          <option value="GB">🇬🇧 United Kingdom</option>
+          <option value="AU">🇦🇺 Australia</option>
+          <option value="NZ">🇳🇿 New Zealand</option>
+          <option value="IE">🇮🇪 Ireland</option>
+          <option value="DE">🇩🇪 Germany</option>
+          <option value="FR">🇫🇷 France</option>
+          <option value="ES">🇪🇸 Spain</option>
+          <option value="IT">🇮🇹 Italy</option>
+          <option value="NL">🇳🇱 Netherlands</option>
+          <option value="BE">🇧🇪 Belgium</option>
+          <option value="PT">🇵🇹 Portugal</option>
+          <option value="SE">🇸🇪 Sweden</option>
+          <option value="NO">🇳🇴 Norway</option>
+          <option value="DK">🇩🇰 Denmark</option>
+          <option value="FI">🇫🇮 Finland</option>
+          <option value="CH">🇨🇭 Switzerland</option>
+          <option value="AT">🇦🇹 Austria</option>
+          <option value="PL">🇵🇱 Poland</option>
+          <option value="MX">🇲🇽 Mexico</option>
+          <option value="BR">🇧🇷 Brazil</option>
+          <option value="AR">🇦🇷 Argentina</option>
+          <option value="CL">🇨🇱 Chile</option>
+          <option value="CO">🇨🇴 Colombia</option>
+          <option value="IN">🇮🇳 India</option>
+          <option value="JP">🇯🇵 Japan</option>
+          <option value="SG">🇸🇬 Singapore</option>
+          <option value="MY">🇲🇾 Malaysia</option>
+          <option value="PH">🇵🇭 Philippines</option>
+          <option value="HK">🇭🇰 Hong Kong</option>
+          <option value="AE">🇦🇪 UAE</option>
+          <option value="SA">🇸🇦 Saudi Arabia</option>
+          <option value="ZA">🇿🇦 South Africa</option>
+        </select>
+      </div>
+      <input id="ship-phone" placeholder="Phone Number" style="margin-bottom:6px;">
+      <input id="ship-email" placeholder="Email Address" type="email">
+    </div>
+  </div>
+
+  <!-- MIDDLE: Credit Cards -->
+  <div class="panel">
+    <div class="panel-title">Credit Cards</div>
+    <textarea id="cards-input" placeholder="Paste cards here&#10;CC|MM|YY|CVV" rows="7"></textarea>
+
+    <button class="btn btn-green mt6" id="check-btn" onclick="checkCards()">Check</button>
+  </div>
+
+  <!-- RIGHT: Nexus -->
+  <div class="panel">
+    <div class="panel-title">Nexus</div>
+    <textarea id="site-url" placeholder="Please input your website URL/s" rows="3"></textarea>
+
+    <div class="proxy-row mt6">
+      <input id="proxy-input" placeholder="ip:port or ip:port:user:pass">
+      <button class="btn btn-cyan" id="proxy-check-btn" onclick="checkProxy()">Check</button>
+    </div>
+    <div id="proxy-result" style="font-size:10px;margin-top:4px;min-height:14px;"></div>
+
+    <div class="proxy-row mt6">
+      <input id="bot-input" placeholder="telegramToken::chatid">
+      <button class="btn btn-cyan" id="bot-test-btn" onclick="testBot()">Test</button>
+    </div>
+    <div id="bot-result" style="font-size:10px;margin-top:4px;min-height:14px;"></div>
+
+    <!-- Selected product info -->
+    <div class="selected-product-info" id="selected-product-info"></div>
+
+    <div class="stats-row">
+      <div class="stat-item">CVV : <span id="stat-cvv">0</span></div>
+      <div class="stat-item">CCN : <span id="stat-ccn">0</span></div>
+      <div class="stat-item">DEAD : <span id="stat-dead">0</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="status-bar" id="status-bar"></div>
+
+<!-- Result Sections -->
+<div class="result-section">
+  <div class="result-header">
+    <span class="result-label cvv-lbl">CVV</span>
+    <button class="btn-sm" onclick="toggleResult('cvv')">Show/Hide</button>
+    <button class="btn-sm" onclick="clearResult('cvv')">Clear</button>
+  </div>
+  <div class="result-body" id="result-cvv"></div>
+</div>
+
+<div class="result-section">
+  <div class="result-header">
+    <span class="result-label ccn-lbl">CCN</span>
+    <button class="btn-sm" onclick="toggleResult('ccn')">Show/Hide</button>
+    <button class="btn-sm" onclick="clearResult('ccn')">Clear</button>
+  </div>
+  <div class="result-body" id="result-ccn"></div>
+</div>
+
+<div class="result-section">
+  <div class="result-header">
+    <span class="result-label dead-lbl">DEAD</span>
+    <button class="btn-sm" onclick="toggleResult('dead')">Show/Hide</button>
+    <button class="btn-sm" onclick="clearResult('dead')">Clear</button>
+  </div>
+  <div class="result-body" id="result-dead"></div>
+</div>
+
+<!-- Bottom bar: Check Site Products button -->
+<div class="bottom-bar">
+  <button class="btn-check-site" onclick="openProductModal()">Check Site Products</button>
+</div>
+
+<!-- Product Modal -->
+<div class="modal-overlay" id="product-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Select Product</h3>
+      <button class="modal-close" onclick="closeProductModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body">
+      <div class="loading-products">Enter site URL and click "Check Site Products" to load.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="closeProductModal()">Cancel</button>
+      <button class="btn btn-cyan" onclick="confirmProduct()">Use Selected</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let selectedVariant = null;
+  let selectedProductTitle = '';
+  let tempSelectedVariant = null;
+
+  /* ── Nonce management ── */
+  let currentNonce = '';
+
+  async function refreshNonce() {
+    try {
+      const res = await fetch('/nonce');
+      const d = await res.json();
+      if (d.nonce) currentNonce = d.nonce;
+    } catch(e) {}
+  }
+
+  function apiFetch(url, options = {}) {
+    options.headers = Object.assign(
+      {'Content-Type': 'application/json', 'X-Nonce': currentNonce},
+      options.headers || {}
+    );
+    return fetch(url, options);
+  }
+
+  refreshNonce();
+  setInterval(refreshNonce, 10000);
+
+  /* ── User info bar ── */
+  async function loadUserInfo() {
+    try {
+      const res = await apiFetch('/user_info');
+      if (!res.ok) return;
+      const d = await res.json();
+      document.getElementById('ubar-name').textContent = d.name || 'User';
+      document.getElementById('ubar-key').textContent = d.key || '';
+      const expEl = document.getElementById('ubar-expiry');
+      if (d.days_left > 0) {
+        expEl.textContent = `· ${d.days_left}d ${d.hours_left}h left`;
+        expEl.className = 'user-bar-expiry' + (d.days_left <= 3 ? ' critical' : d.days_left <= 7 ? ' warning' : '');
+      } else {
+        expEl.textContent = '· Expired';
+        expEl.className = 'user-bar-expiry critical';
+      }
+      document.getElementById('user-bar').style.display = 'flex';
+    } catch(e) {}
+  }
+  setTimeout(loadUserInfo, 300);
+
+  const DEFAULT_STATES = {};  // populated on-demand from /provinces
+
+  function fillShipStateOptions(provinces) {
+    const sel = document.getElementById('ship-state');
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">State/Province</option>';
+    if (!provinces || provinces.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '— Not required —';
+      sel.appendChild(opt);
+      return;
+    }
+    provinces.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.code;
+      opt.textContent = p.name;
+      if (p.code === prev) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  }
+
+  async function updateShipStateDropdown(countryCode) {
+    if (!countryCode) return;
+    if (DEFAULT_STATES[countryCode] !== undefined) {
+      fillShipStateOptions(DEFAULT_STATES[countryCode]);
+      return;
+    }
+    try {
+      const res = await apiFetch('/provinces', {
+        method: 'POST',
+        body: JSON.stringify({ country: countryCode })
+      });
+      const d = await res.json();
+      DEFAULT_STATES[countryCode] = d.provinces || [];
+      fillShipStateOptions(DEFAULT_STATES[countryCode]);
+    } catch(e) {
+      fillShipStateOptions([]);
+    }
+  }
+
+  function setStatus(msg, type) {
+    const el = document.getElementById('status-bar');
+    el.textContent = msg;
+    el.className = 'status-bar' + (type ? ' ' + type : '');
+  }
+
+  function toggleResult(type) {
+    const el = document.getElementById('result-' + type);
+    el.classList.toggle('visible');
+  }
+
+  function clearResult(type) {
+    const el = document.getElementById('result-' + type);
+    el.innerHTML = '';
+    updateStats();
+  }
+
+  function updateStats() {
+    ['cvv','ccn','dead'].forEach(t => {
+      const el = document.getElementById('result-' + t);
+      const count = el.querySelectorAll('.result-item').length;
+      document.getElementById('stat-' + t).textContent = count;
+    });
+  }
+
+  function appendResult(type, text, isLive) {
+    const el = document.getElementById('result-' + type);
+    const item = document.createElement('div');
+    item.className = 'result-item ' + (isLive ? 'live' : 'dead');
+    item.textContent = text;
+    el.appendChild(item);
+    el.classList.add('visible');
+    updateStats();
+  }
+
+  function toggleShippingFields() {
+    const checked = document.getElementById('custom-ship-toggle').checked;
+    document.getElementById('shipping-fields').style.display = checked ? 'block' : 'none';
+    if (checked) updateShipStateDropdown(document.getElementById('ship-country').value);
+  }
+
+  /* ── Auto-fetch countries from site URL ── */
+  let _countryDebounce = null;
+  let _lastFetchedSite = '';
+  const FLAG_MAP = {
+    US:'🇺🇸',CA:'🇨🇦',GB:'🇬🇧',AU:'🇦🇺',NZ:'🇳🇿',IE:'🇮🇪',DE:'🇩🇪',FR:'🇫🇷',
+    ES:'🇪🇸',IT:'🇮🇹',NL:'🇳🇱',BE:'🇧🇪',PT:'🇵🇹',SE:'🇸🇪',NO:'🇳🇴',DK:'🇩🇰',
+    FI:'🇫🇮',CH:'🇨🇭',AT:'🇦🇹',PL:'🇵🇱',MX:'🇲🇽',BR:'🇧🇷',AR:'🇦🇷',CL:'🇨🇱',
+    CO:'🇨🇴',IN:'🇮🇳',JP:'🇯🇵',SG:'🇸🇬',MY:'🇲🇾',PH:'🇵🇭',HK:'🇭🇰',AE:'🇦🇪',
+    SA:'🇸🇦',ZA:'🇿🇦',KR:'🇰🇷',TW:'🇹🇼',TH:'🇹🇭',ID:'🇮🇩',VN:'🇻🇳',PK:'🇵🇰',
+    NG:'🇳🇬',EG:'🇪🇬',KE:'🇰🇪',GH:'🇬🇭',CZ:'🇨🇿',HU:'🇭🇺',RO:'🇷🇴',GR:'🇬🇷',
+    TR:'🇹🇷',IL:'🇮🇱',QA:'🇶🇦',KW:'🇰🇼',BH:'🇧🇭'
+  };
+
+  async function fetchSiteCountries() {
+    const site = document.getElementById('site-url').value.trim();
+    if (!site || site === _lastFetchedSite) return;
+    _lastFetchedSite = site;
+
+    const statusEl = document.getElementById('country-fetch-status');
+    const countrySelect = document.getElementById('ship-country');
+    if (statusEl) { statusEl.textContent = '⟳ Fetching countries...'; statusEl.style.color = '#888'; }
+
+    try {
+      const res = await apiFetch('/site_countries', {
+        method: 'POST',
+        body: JSON.stringify({ site })
+      });
+      const data = await res.json();
+
+      if (data.countries && data.countries.length > 0) {
+        const prev = countrySelect.value;
+        countrySelect.innerHTML = '';
+        data.countries.forEach(c => {
+          const flag = FLAG_MAP[c.code] || '';
+          const opt = document.createElement('option');
+          opt.value = c.code;
+          opt.textContent = (flag ? flag + ' ' : '') + c.name;
+          if (c.code === prev) opt.selected = true;
+          countrySelect.appendChild(opt);
+        });
+        updateShipStateDropdown(countrySelect.value);
+        if (statusEl) {
+          statusEl.textContent = `✓ ${data.countries.length} countries`;
+          statusEl.style.color = '#66bb6a';
+          setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 4000);
+        }
+      } else {
+        if (statusEl) statusEl.textContent = '';
+      }
+    } catch(e) {
+      if (statusEl) statusEl.textContent = '';
+    }
+  }
+
+  document.getElementById('site-url').addEventListener('input', function() {
+    clearTimeout(_countryDebounce);
+    _countryDebounce = setTimeout(fetchSiteCountries, 900);
+  });
+  document.getElementById('site-url').addEventListener('blur', fetchSiteCountries);
+
+
+  async function generateCards() {
+    const bin = document.getElementById('gen-bin').value.trim();
+    const month = document.getElementById('gen-month').value.trim();
+    const year = document.getElementById('gen-year').value.trim();
+    const cvv = document.getElementById('gen-cvv').value.trim();
+    const amount = document.getElementById('gen-amount').value.trim() || '10';
+
+    if (!bin) { setStatus('BIN is required', 'error'); return; }
+
+    setStatus('Generating cards...', 'active');
+    try {
+      const res = await apiFetch('/generate', {
+        method: 'POST',
+        body: JSON.stringify({bin, month, year, cvv, amount: parseInt(amount)})
+      });
+      const data = await res.json();
+      if (data.error) { setStatus(data.error, 'error'); return; }
+      document.getElementById('cards-input').value = data.cards.join('\n');
+      setStatus(`Generated ${data.cards.length} cards`, '');
+    } catch(e) {
+      setStatus('Error: ' + e.message, 'error');
+    }
+  }
+
+  async function checkProxy() {
+    const proxy = document.getElementById('proxy-input').value.trim();
+    const resultEl = document.getElementById('proxy-result');
+    const btn = document.getElementById('proxy-check-btn');
+    if (!proxy) { resultEl.style.color = '#e57373'; resultEl.textContent = 'Enter a proxy first'; return; }
+    btn.disabled = true;
+    btn.textContent = '...';
+    resultEl.style.color = '#888';
+    resultEl.textContent = 'Checking...';
+    try {
+      const res = await apiFetch('/check_proxy', {
+        method: 'POST',
+        body: JSON.stringify({proxy})
+      });
+      const data = await res.json();
+      if (data.success) {
+        resultEl.style.color = '#66bb6a';
+        resultEl.textContent = `✓ Working — IP: ${data.ip}`;
+      } else {
+        resultEl.style.color = '#e57373';
+        resultEl.textContent = `✗ Failed — ${data.error}`;
+      }
+    } catch(e) {
+      resultEl.style.color = '#e57373';
+      resultEl.textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Check';
+    }
+  }
+
+  async function testBot() {
+    const bot = document.getElementById('bot-input').value.trim();
+    const resultEl = document.getElementById('bot-result');
+    const btn = document.getElementById('bot-test-btn');
+    if (!bot) { resultEl.style.color = '#e57373'; resultEl.textContent = 'Enter token::chatid first'; return; }
+    btn.disabled = true;
+    btn.textContent = '...';
+    resultEl.style.color = '#888';
+    resultEl.textContent = 'Testing...';
+    try {
+      const res = await apiFetch('/test_bot', {
+        method: 'POST',
+        body: JSON.stringify({bot})
+      });
+      const data = await res.json();
+      if (data.success) {
+        resultEl.style.color = '#66bb6a';
+        resultEl.textContent = `✓ Working — Bot: @${data.username || 'unknown'}`;
+      } else {
+        resultEl.style.color = '#e57373';
+        resultEl.textContent = `✗ Failed — ${data.error}`;
+      }
+    } catch(e) {
+      resultEl.style.color = '#e57373';
+      resultEl.textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Test';
+    }
+  }
+
+  async function checkCards() {
+    const site = document.getElementById('site-url').value.trim();
+    const cards = document.getElementById('cards-input').value.trim();
+    const proxy = document.getElementById('proxy-input').value.trim();
+    const bot = document.getElementById('bot-input').value.trim();
+
+    if (!site) { setStatus('Site URL is required', 'error'); return; }
+    if (!cards) { setStatus('No cards to check', 'error'); return; }
+
+    let custom_address = null;
+    let ship_name = null;
+    const useCustom = document.getElementById('custom-ship-toggle').checked;
+    if (useCustom) {
+      ship_name = document.getElementById('ship-name').value.trim() || null;
+      custom_address = {
+        name: ship_name,
+        street: document.getElementById('ship-street').value.trim(),
+        city: document.getElementById('ship-city').value.trim(),
+        state: document.getElementById('ship-state').value.trim(),
+        zip: document.getElementById('ship-zip').value.trim(),
+        phone: document.getElementById('ship-phone').value.trim(),
+        country: document.getElementById('ship-country').value || 'US',
+      };
+    }
+
+    const btn = document.getElementById('check-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Checking...';
+    setStatus('Checking cards...', 'active');
+
+    try {
+      const res = await apiFetch('/check', {
+        method: 'POST',
+        body: JSON.stringify({
+          site,
+          cards,
+          proxy: proxy || null,
+          bot: bot || null,
+          ship_name,
+          custom_address,
+          selected_variant: selectedVariant
+        })
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        setStatus('Error: ' + data.error, 'error');
+      } else {
+        data.cvv.forEach(c => appendResult('cvv', c, true));
+        data.ccn.forEach(c => appendResult('ccn', c, true));
+        data.dead.forEach(c => appendResult('dead', c, false));
+        setStatus(`Done: ${data.cvv.length} CVV, ${data.ccn.length} CCN, ${data.dead.length} Dead`, '');
+      }
+    } catch(e) {
+      setStatus('Error: ' + e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Check';
+    }
+  }
+
+
+  async function openProductModal() {
+    const site = document.getElementById('site-url').value.trim();
+    const modalBody = document.getElementById('modal-body');
+    document.getElementById('product-modal').classList.add('active');
+    tempSelectedVariant = selectedVariant;
+
+    modalBody.innerHTML = '<div class="loading-products"><span class="spinner"></span>Loading products...</div>';
+
+    if (!site) {
+      modalBody.innerHTML = '<div class="loading-products" style="color:#e57373;">Please enter a site URL first.</div>';
+      return;
+    }
+
+    try {
+      const res = await apiFetch('/site_products', {
+        method: 'POST',
+        body: JSON.stringify({site})
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        modalBody.innerHTML = `<div class="loading-products" style="color:#e57373;">${data.error}</div>`;
+        return;
+      }
+
+      if (!data.products || data.products.length === 0) {
+        modalBody.innerHTML = '<div class="loading-products">No products found.</div>';
+        return;
+      }
+
+      modalBody.innerHTML = '';
+      data.products.forEach(p => {
+        const div = document.createElement('div');
+        div.className = 'product-item' + (tempSelectedVariant && tempSelectedVariant.startsWith(p.variant_id) ? ' selected' : '');
+        div.dataset.variant = `${p.variant_id}|${p.handle}|${p.price}`;
+        div.dataset.title = p.title;
+        div.innerHTML = `
+          <div>
+            <div class="p-title">${p.title}</div>
+            <div class="p-avail">${p.available ? '✓ In Stock' : '✗ Out of Stock'}</div>
+          </div>
+          <div class="p-price">$${p.price}</div>
+        `;
+        div.addEventListener('click', () => {
+          document.querySelectorAll('.product-item').forEach(x => x.classList.remove('selected'));
+          div.classList.add('selected');
+          tempSelectedVariant = div.dataset.variant;
+        });
+        modalBody.appendChild(div);
+      });
+    } catch(e) {
+      modalBody.innerHTML = `<div class="loading-products" style="color:#e57373;">Error: ${e.message}</div>`;
+    }
+  }
+
+  function closeProductModal() {
+    document.getElementById('product-modal').classList.remove('active');
+    tempSelectedVariant = null;
+  }
+
+  function confirmProduct() {
+    if (!tempSelectedVariant) {
+      selectedVariant = null;
+      selectedProductTitle = '';
+      document.getElementById('selected-product-info').classList.remove('visible');
+      document.getElementById('selected-product-info').textContent = '';
+    } else {
+      selectedVariant = tempSelectedVariant;
+      const parts = selectedVariant.split('|');
+      const price = parts[2] || '';
+      const info = document.getElementById('selected-product-info');
+
+      const selected = document.querySelector('.product-item.selected');
+      selectedProductTitle = selected ? selected.dataset.title : 'Selected product';
+      info.textContent = `Product: ${selectedProductTitle} ($${price})`;
+      info.classList.add('visible');
+    }
+    closeProductModal();
+  }
+
+  document.getElementById('product-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeProductModal();
+  });
+
+  /* ═══════════════════════════════════════════════════
+     SOUND ENGINE  (Web Audio API — no files needed)
+     ═══════════════════════════════════════════════════ */
+  const SFX = (() => {
+    let ctx = null;
+
+    function getCtx() {
+      if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') ctx.resume();
+      return ctx;
+    }
+
+    /* generic oscillator burst */
+    function osc(freq, type, gainPeak, startSec, durationSec, detuneCents = 0) {
+      const ac = getCtx();
+      const o = ac.createOscillator();
+      const g = ac.createGain();
+      o.connect(g); g.connect(ac.destination);
+      o.type = type;
+      o.frequency.value = freq;
+      o.detune.value = detuneCents;
+      const t0 = ac.currentTime + startSec;
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(gainPeak, t0 + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + durationSec);
+      o.start(t0);
+      o.stop(t0 + durationSec + 0.01);
+    }
+
+    /* subtle noise burst for click texture */
+    function noise(gainPeak, startSec, durationSec) {
+      const ac = getCtx();
+      const buf = ac.createBuffer(1, ac.sampleRate * durationSec, ac.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1);
+      const src = ac.createBufferSource();
+      src.buffer = buf;
+      const bpf = ac.createBiquadFilter();
+      bpf.type = 'bandpass'; bpf.frequency.value = 2400; bpf.Q.value = 1.8;
+      const g = ac.createGain();
+      src.connect(bpf); bpf.connect(g); g.connect(ac.destination);
+      const t0 = ac.currentTime + startSec;
+      g.gain.setValueAtTime(gainPeak, t0);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + durationSec);
+      src.start(t0); src.stop(t0 + durationSec + 0.01);
+    }
+
+    return {
+      /* crisp UI click — heard on every button press */
+      click() {
+        osc(900,  'triangle', 0.22, 0,    0.045);
+        osc(450,  'triangle', 0.12, 0.01, 0.035);
+        noise(0.06, 0, 0.03);
+      },
+
+      /* CVV hit — bright single ding */
+      cvvHit() {
+        osc(880, 'sine', 0.55, 0,    0.38);
+        osc(880, 'sine', 0.18, 0,    0.55, +7);   /* slight detune shimmer */
+        osc(1760,'sine', 0.12, 0.01, 0.22);       /* octave sparkle */
+      },
+
+      /* CCN (full charge) hit — triumphant 3-note arpeggio */
+      ccnHit() {
+        const notes = [523.25, 659.25, 783.99];   /* C5 – E5 – G5 */
+        notes.forEach((f, i) => {
+          osc(f,     'sine',     0.55, i * 0.11, 0.45);
+          osc(f * 2, 'sine',     0.10, i * 0.11, 0.30);
+          osc(f,     'triangle', 0.06, i * 0.11, 0.55, +5);
+        });
+        /* sub-bass thump on the first note */
+        osc(130, 'sine', 0.28, 0, 0.18);
+      }
+    };
+  })();
+
+  /* ── Wire click sound to every button ── */
+  document.addEventListener('click', e => {
+    const el = e.target.closest('button, .btn, .btn-sm, .btn-logout, .btn-check-site, .modal-close, .product-item');
+    if (el) SFX.click();
+  }, true);   /* capture phase so it fires even if handler calls stopPropagation */
+
+  /* ── Patch appendResult to play hit sounds ── */
+  const _origAppend = appendResult;
+  window.appendResult = function(type, text, isLive) {
+    _origAppend(type, text, isLive);
+    if (isLive) {
+      if (type === 'ccn') SFX.ccnHit();
+      else if (type === 'cvv') SFX.cvvHit();
+    }
+  };
+</script>
+</body>
+</html>
