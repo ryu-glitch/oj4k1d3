@@ -1264,7 +1264,55 @@ class ShopifyChecker:
             text = await resp.text()
 
             if "Your order total has changed." in text:
-                return False, "Site not supported - Total changed", {}
+                # Shopify updated the total (tax/shipping adjustment).
+                # Try to pull the new amount from the response and retry once.
+                new_total = None
+                try:
+                    import json as _json_mod
+                    rj = _json_mod.loads(text)
+                    # Walk the full JSON looking for a totalAmount.amount field
+                    def _find_total(obj):
+                        if isinstance(obj, dict):
+                            if "totalAmount" in obj:
+                                ta = obj["totalAmount"]
+                                if isinstance(ta, dict) and "amount" in ta:
+                                    return ta["amount"]
+                            for v in obj.values():
+                                r = _find_total(v)
+                                if r:
+                                    return r
+                        elif isinstance(obj, list):
+                            for item in obj:
+                                r = _find_total(item)
+                                if r:
+                                    return r
+                        return None
+                    new_total = _find_total(rj)
+                except Exception:
+                    pass
+
+                # Fallback: regex scan for first decimal amount in the text
+                if not new_total:
+                    import re as _re
+                    m = _re.search(r'"amount"\s*:\s*"(\d+\.\d+)"', text)
+                    if m:
+                        new_total = m.group(1)
+
+                if new_total and new_total != running_total:
+                    # Patch both the payment line and the outer totalAmount
+                    running_total = new_total
+                    completion_json["variables"]["input"]["payment"]["paymentLines"][0][
+                        "amount"
+                    ]["value"]["amount"] = running_total
+                    # retry
+                    resp2 = await self.session.post(
+                        graphql_url, json=completion_json, headers=headers
+                    )
+                    text = await resp2.text()
+                    if "Your order total has changed." in text:
+                        return False, "Site not supported - Total changed", {}
+                else:
+                    return False, "Site not supported - Total changed", {}
 
             if "The requested payment method is not available." in text:
                 return False, "Payment method not available", {}
@@ -1316,8 +1364,9 @@ class ShopifyChecker:
                 return False, "Invalid CVV | CVV invalid for card type", {}
 
             try:
-                resp_json = await resp.json(content_type=None)
-            except Exception as je:
+                import json as _j
+                resp_json = _j.loads(text)
+            except Exception:
                 resp_json = {}
 
             receipt_id, err_msg = _parse_submit_result(resp_json, text)
@@ -1335,7 +1384,7 @@ class ShopifyChecker:
                 ):
                     return False, "Invalid CVV | CVV invalid for card type", {}
                 try:
-                    resp_json = await resp.json(content_type=None)
+                    resp_json = _j.loads(text)
                 except Exception:
                     resp_json = {}
                 receipt_id, err_msg = _parse_submit_result(resp_json, text)
