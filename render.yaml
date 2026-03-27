@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: nexus-shopify
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: OWNER_BOT_TOKEN
+        sync: false
+      - key: OWNER_CHAT_ID
+        sync: false
