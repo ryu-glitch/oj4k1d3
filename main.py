@@ -513,7 +513,8 @@ class ShopifyChecker:
             for url in candidate_urls:
                 try:
                     async with self.session.get(
-                        url, timeout=aiohttp.ClientTimeout(total=10)
+                        url, timeout=aiohttp.ClientTimeout(total=10),
+                        proxy=self.proxy or None
                     ) as resp:
                         if resp.status != 200:
                             continue
@@ -572,7 +573,8 @@ class ShopifyChecker:
         for url in candidate_urls:
             try:
                 async with self.session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=15)
+                    url, timeout=aiohttp.ClientTimeout(total=15),
+                    proxy=self.proxy or None
                 ) as resp:
                     last_status = resp.status
                     if resp.status != 200:
@@ -2063,10 +2065,12 @@ def check():
 def site_countries():
     data = request.json
     site = (data.get("site") or "").strip()
+    proxy_str = (data.get("proxy") or "").strip()
     if not site:
         return jsonify({"error": "Site URL required"}), 400
 
     domain = site.replace("https://", "").replace("http://", "").strip("/")
+    proxy_url = parse_proxy_string(proxy_str) if proxy_str else None
 
     def _parse_country_options(html_text):
         """Parse <option value="XX">Country Name</option> from HTML."""
@@ -2118,6 +2122,7 @@ def site_countries():
                 async with session.get(
                     f"{base_url}/localization.json",
                     headers={**headers, "Accept": "application/json"},
+                    proxy=proxy_url,
                 ) as resp:
                     if resp.status == 200:
                         d = await resp.json(content_type=None)
@@ -2140,7 +2145,8 @@ def site_countries():
             # --- Strategy 2: Embedded JSON in homepage ---
             try:
                 async with session.get(
-                    f"{base_url}/", headers={**headers, "Accept": "text/html"}
+                    f"{base_url}/", headers={**headers, "Accept": "text/html"},
+                    proxy=proxy_url,
                 ) as resp:
                     if resp.status == 200:
                         text = await resp.text()
@@ -2176,6 +2182,7 @@ def site_countries():
             try:
                 checker = ShopifyChecker()
                 checker.session = session
+                checker.proxy = proxy_url
                 success, product_data = await checker.fetch_products(domain)
                 if success:
                     variant_id = product_data["variant_id"]
@@ -2183,12 +2190,14 @@ def site_countries():
                         f"{base_url}/cart/add.js",
                         json={"id": variant_id},
                         headers=headers,
+                        proxy=proxy_url,
                     )
-                    resp = await session.post(f"{base_url}/checkout/", headers=headers)
+                    resp = await session.post(f"{base_url}/checkout/", headers=headers, proxy=proxy_url)
                     checkout_url = str(resp.url)
                     if "login" not in checkout_url.lower():
                         resp = await session.get(
-                            checkout_url, headers={**headers, "Accept": "text/html"}
+                            checkout_url, headers={**headers, "Accept": "text/html"},
+                            proxy=proxy_url,
                         )
                         text = await resp.text()
                         m = re.search(
@@ -2266,10 +2275,12 @@ def site_countries():
 def site_products():
     data = request.json
     site = (data.get("site") or "").strip()
+    proxy_str = (data.get("proxy") or "").strip()
     if not site:
         return jsonify({"error": "Site URL is required"}), 400
 
     domain = site.replace("https://", "").replace("http://", "").strip("/")
+    proxy_url = parse_proxy_string(proxy_str) if proxy_str else None
 
     async def fetch():
         headers = {
@@ -2286,6 +2297,7 @@ def site_products():
         ) as session:
             checker = ShopifyChecker()
             checker.session = session
+            checker.proxy = proxy_url
             return await checker.fetch_all_products(domain)
 
     try:
