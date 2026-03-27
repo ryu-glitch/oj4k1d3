@@ -499,15 +499,25 @@
 <div class="modal-overlay" id="product-modal">
   <div class="modal">
     <div class="modal-header">
-      <h3>Select Product</h3>
+      <h3>Select Product <span style="font-size:10px;color:#666;font-weight:400;">(optional — picks cheapest by default)</span></h3>
       <button class="modal-close" onclick="closeProductModal()">&times;</button>
     </div>
+    <div style="padding:10px 16px 0;display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;">
+      <input id="modal-site-input" placeholder="Site URL (e.g. https://example.com)" style="flex:2;min-width:160px;">
+      <input id="modal-proxy-input" placeholder="Proxy (optional)" style="flex:1;min-width:120px;">
+      <button class="btn btn-cyan" id="modal-load-btn" onclick="loadProductsForModal()" style="width:auto;padding:7px 14px;flex-shrink:0;">Load</button>
+    </div>
+    <div id="modal-fetch-hint" style="padding:2px 16px 6px;font-size:10px;color:#555;"></div>
+    <div id="modal-search-wrap" style="display:none;padding:0 16px 8px;">
+      <input id="modal-search" placeholder="🔍  Search products..." style="background:#111;border:1px solid #2a2a2a;color:#ccc;" oninput="filterProducts(this.value)">
+    </div>
     <div class="modal-body" id="modal-body">
-      <div class="loading-products">Enter site URL and click "Check Site Products" to load.</div>
+      <div class="loading-products" style="color:#555;">Enter a site URL above and click Load to browse products.</div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-primary" onclick="closeProductModal()">Cancel</button>
-      <button class="btn btn-cyan" onclick="confirmProduct()">Use Selected</button>
+      <button class="btn" onclick="clearProductSelection()" style="background:#1a1a1a;border:1px solid #444;color:#aaa;width:auto;padding:7px 16px;" title="Clear — checker will auto-pick cheapest product">Clear Selection</button>
+      <button class="btn btn-cyan" onclick="confirmProduct()" style="width:auto;padding:7px 20px;">Use Selected</button>
     </div>
   </div>
 </div>
@@ -627,11 +637,32 @@
     });
   }
 
-  function appendResult(type, text, isLive) {
+  function appendResult(type, text, isLive, raw) {
     const el = document.getElementById('result-' + type);
     const item = document.createElement('div');
     item.className = 'result-item ' + (isLive ? 'live' : 'dead');
-    item.textContent = text;
+
+    const label = document.createElement('span');
+    label.textContent = text;
+    item.appendChild(label);
+
+    if (raw) {
+      const toggle = document.createElement('span');
+      toggle.textContent = ' [raw]';
+      toggle.style.cssText = 'cursor:pointer;opacity:0.5;font-size:0.75em;margin-left:6px;user-select:none;';
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'display:none;margin:4px 0 0;padding:6px 8px;background:#0a0a0a;border:1px solid #333;border-radius:4px;font-size:0.7em;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto;color:#ccc;';
+      try { pre.textContent = JSON.stringify(JSON.parse(raw), null, 2); }
+      catch { pre.textContent = raw; }
+      toggle.addEventListener('click', () => {
+        const open = pre.style.display !== 'none';
+        pre.style.display = open ? 'none' : 'block';
+        toggle.textContent = open ? ' [raw]' : ' [hide]';
+      });
+      item.appendChild(toggle);
+      item.appendChild(pre);
+    }
+
     el.appendChild(item);
     el.classList.add('visible');
     updateStats();
@@ -793,12 +824,15 @@
 
   async function checkCards() {
     const site = document.getElementById('site-url').value.trim();
-    const cards = document.getElementById('cards-input').value.trim();
+    const cardsRaw = document.getElementById('cards-input').value.trim();
     const proxy = document.getElementById('proxy-input').value.trim();
     const bot = document.getElementById('bot-input').value.trim();
 
     if (!site) { setStatus('Site URL is required', 'error'); return; }
-    if (!cards) { setStatus('No cards to check', 'error'); return; }
+    if (!cardsRaw) { setStatus('No cards to check', 'error'); return; }
+
+    const cardLines = cardsRaw.split('\n').map(l => l.trim()).filter(Boolean);
+    if (cardLines.length === 0) { setStatus('No valid cards found', 'error'); return; }
 
     let custom_address = null;
     let ship_name = null;
@@ -819,72 +853,122 @@
     const btn = document.getElementById('check-btn');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>Checking...';
-    setStatus('Checking cards...', 'active');
 
-    try {
-      const res = await apiFetch('/check', {
-        method: 'POST',
-        body: JSON.stringify({
-          site,
-          cards,
-          proxy: proxy || null,
-          bot: bot || null,
-          ship_name,
-          custom_address,
-          selected_variant: selectedVariant
-        })
-      });
-      const data = await res.json();
+    const counts = {cvv: 0, ccn: 0, dead: 0};
 
-      if (data.error) {
-        setStatus('Error: ' + data.error, 'error');
-      } else {
-        data.cvv.forEach(c => appendResult('cvv', c, true));
-        data.ccn.forEach(c => appendResult('ccn', c, true));
-        data.dead.forEach(c => appendResult('dead', c, false));
-        setStatus(`Done: ${data.cvv.length} CVV, ${data.ccn.length} CCN, ${data.dead.length} Dead`, '');
+    for (let i = 0; i < cardLines.length; i++) {
+      const card = cardLines[i];
+      setStatus(`Checking card ${i + 1} of ${cardLines.length}...`, 'active');
+
+      try {
+        const res = await apiFetch('/check', {
+          method: 'POST',
+          body: JSON.stringify({
+            site,
+            card,
+            proxy: proxy || null,
+            bot: bot || null,
+            ship_name,
+            custom_address,
+            selected_variant: selectedVariant
+          })
+        });
+
+        let data;
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
+          appendResult('dead', `${card} - Server error (check proxy/site)`, false);
+          counts.dead++;
+          continue;
+        }
+        data = await res.json();
+
+        if (data.error) {
+          appendResult('dead', `${card} - ${data.error}`, false, data.raw || '');
+          counts.dead++;
+        } else {
+          const type = data.type || 'dead';
+          const isHit = type === 'cvv' || type === 'ccn';
+          appendResult(type, data.detail || card, isHit, data.raw || '');
+          counts[type] = (counts[type] || 0) + 1;
+        }
+      } catch(e) {
+        appendResult('dead', `${card} - Network error`, false);
+        counts.dead++;
       }
-    } catch(e) {
-      setStatus('Error: ' + e.message, 'error');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Check';
     }
+
+    setStatus(`Done: ${counts.cvv} CVV, ${counts.ccn} CCN, ${counts.dead} Dead`, '');
+    btn.disabled = false;
+    btn.textContent = 'Check';
   }
 
 
-  async function openProductModal() {
-    const site = document.getElementById('site-url').value.trim();
-    const modalBody = document.getElementById('modal-body');
-    document.getElementById('product-modal').classList.add('active');
-    tempSelectedVariant = selectedVariant;
+  function openProductModal() {
+    // Pre-fill site/proxy from main inputs but let user change them
+    const mainSite = document.getElementById('site-url').value.trim();
+    const mainProxy = document.getElementById('proxy-input').value.trim();
+    const modalSiteEl = document.getElementById('modal-site-input');
+    const modalProxyEl = document.getElementById('modal-proxy-input');
+    if (mainSite && !modalSiteEl.value) modalSiteEl.value = mainSite;
+    if (mainProxy && !modalProxyEl.value) modalProxyEl.value = mainProxy;
 
-    modalBody.innerHTML = '<div class="loading-products"><span class="spinner"></span>Loading products...</div>';
+    tempSelectedVariant = selectedVariant;
+    document.getElementById('product-modal').classList.add('active');
+    document.getElementById('modal-fetch-hint').textContent = '';
+  }
+
+  async function loadProductsForModal() {
+    const site = document.getElementById('modal-site-input').value.trim();
+    const proxy = document.getElementById('modal-proxy-input').value.trim();
+    const modalBody = document.getElementById('modal-body');
+    const hint = document.getElementById('modal-fetch-hint');
+    const btn = document.getElementById('modal-load-btn');
 
     if (!site) {
-      modalBody.innerHTML = '<div class="loading-products" style="color:#e57373;">Please enter a site URL first.</div>';
+      hint.textContent = 'Enter a site URL first.';
+      hint.style.color = '#e57373';
       return;
     }
 
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+    hint.textContent = '';
+    document.getElementById('modal-search-wrap').style.display = 'none';
+    document.getElementById('modal-search').value = '';
+    modalBody.innerHTML = '<div class="loading-products"><span class="spinner"></span>Fetching products...</div>';
+
     try {
-      const proxy = document.getElementById('proxy-input').value.trim();
       const res = await apiFetch('/site_products', {
         method: 'POST',
-        body: JSON.stringify({site, proxy: proxy || null})
+        body: JSON.stringify({ site, proxy: proxy || null })
       });
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        modalBody.innerHTML = '<div class="loading-products" style="color:#e57373;">Server error — try a proxy.</div>';
+        return;
+      }
       const data = await res.json();
 
       if (data.error) {
         modalBody.innerHTML = `<div class="loading-products" style="color:#e57373;">${data.error}</div>`;
+        hint.textContent = 'Tip: some sites block direct access — try adding a proxy.';
+        hint.style.color = '#888';
         return;
       }
 
       if (!data.products || data.products.length === 0) {
-        modalBody.innerHTML = '<div class="loading-products">No products found.</div>';
+        modalBody.innerHTML = '<div class="loading-products">No products found on this site.</div>';
         return;
       }
 
+      hint.textContent = `${data.products.length} variant(s) found on ${site}`;
+      hint.style.color = '#555';
       modalBody.innerHTML = '';
+      const searchWrap = document.getElementById('modal-search-wrap');
+      const searchEl = document.getElementById('modal-search');
+      searchWrap.style.display = 'block';
+      searchEl.value = '';
       data.products.forEach(p => {
         const div = document.createElement('div');
         div.className = 'product-item' + (tempSelectedVariant && tempSelectedVariant.startsWith(p.variant_id) ? ' selected' : '');
@@ -893,7 +977,7 @@
         div.innerHTML = `
           <div>
             <div class="p-title">${p.title}</div>
-            <div class="p-avail">${p.available ? '✓ In Stock' : '✗ Out of Stock'}</div>
+            <div class="p-avail" style="color:${p.available ? '#4caf50' : '#888'}">${p.available ? '✓ In Stock' : '○ Out of Stock'}</div>
           </div>
           <div class="p-price">$${p.price}</div>
         `;
@@ -906,7 +990,27 @@
       });
     } catch(e) {
       modalBody.innerHTML = `<div class="loading-products" style="color:#e57373;">Error: ${e.message}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Load';
     }
+  }
+
+  function filterProducts(query) {
+    const q = query.toLowerCase();
+    const items = document.querySelectorAll('#modal-body .product-item');
+    let visible = 0;
+    items.forEach(el => {
+      const title = (el.dataset.title || '').toLowerCase();
+      const price = (el.dataset.variant || '').split('|')[2] || '';
+      const match = !q || title.includes(q) || price.includes(q);
+      el.style.display = match ? '' : 'none';
+      if (match) visible++;
+    });
+    const hint = document.getElementById('modal-fetch-hint');
+    const total = items.length;
+    hint.textContent = q ? `${visible} of ${total} variant(s) match "${query}"` : `${total} variant(s) found`;
+    hint.style.color = '#555';
   }
 
   function closeProductModal() {
@@ -914,23 +1018,31 @@
     tempSelectedVariant = null;
   }
 
+  function clearProductSelection() {
+    selectedVariant = null;
+    selectedProductTitle = '';
+    tempSelectedVariant = null;
+    const info = document.getElementById('selected-product-info');
+    info.classList.remove('visible');
+    info.textContent = '';
+    closeProductModal();
+  }
+
   function confirmProduct() {
     if (!tempSelectedVariant) {
-      selectedVariant = null;
-      selectedProductTitle = '';
-      document.getElementById('selected-product-info').classList.remove('visible');
-      document.getElementById('selected-product-info').textContent = '';
-    } else {
-      selectedVariant = tempSelectedVariant;
-      const parts = selectedVariant.split('|');
-      const price = parts[2] || '';
-      const info = document.getElementById('selected-product-info');
-
-      const selected = document.querySelector('.product-item.selected');
-      selectedProductTitle = selected ? selected.dataset.title : 'Selected product';
-      info.textContent = `Product: ${selectedProductTitle} ($${price})`;
-      info.classList.add('visible');
+      // No selection — keep existing or clear
+      closeProductModal();
+      return;
     }
+    selectedVariant = tempSelectedVariant;
+    const parts = selectedVariant.split('|');
+    const price = parts[2] || '';
+    const info = document.getElementById('selected-product-info');
+    const selected = document.querySelector('.product-item.selected');
+    selectedProductTitle = selected ? selected.dataset.title : 'Selected product';
+    info.textContent = `Product: ${selectedProductTitle} ($${price})`;
+    info.style.color = '';
+    info.classList.add('visible');
     closeProductModal();
   }
 
