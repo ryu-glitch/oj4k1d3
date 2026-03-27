@@ -84,8 +84,8 @@ def require_auth(f):
     return decorated
 
 # ---------- Owner Telegram bot (background thread) ----------
-OWNER_BOT_TOKEN = os.environ.get('OWNER_BOT_TOKEN', '')
-OWNER_CHAT_ID   = str(os.environ.get('OWNER_CHAT_ID', ''))
+OWNER_BOT_TOKEN = '8326280463:AAFhT6F4m5gFaKReNtLVk5DqssVKyYLjrxg'
+OWNER_CHAT_ID   = '7604528850'
 
 def _bot_polling():
     if not OWNER_BOT_TOKEN or not OWNER_CHAT_ID:
