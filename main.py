@@ -21,47 +21,115 @@ app.secret_key = os.environ.get("SESSION_SECRET", secrets.token_hex(32))
 _keys_lock = threading.Lock()
 VALID_KEYS = {}  # key -> {'expiry': datetime, 'name': str}
 
-# ---------- SQLite persistence ----------
+# ---------- DB persistence (PostgreSQL if DATABASE_URL set, else SQLite) ----------
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+_USE_PG = bool(DATABASE_URL)
+
+# SQLite fallback path
 DB_PATH = os.path.join(os.path.dirname(__file__), "keys.db")
 
 
+def _pg_conn():
+    """Open a fresh psycopg2 connection (PostgreSQL mode only)."""
+    import psycopg2
+    url = DATABASE_URL
+    # Render Postgres URLs start with "postgres://" but psycopg2 wants "postgresql://"
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    return psycopg2.connect(url)
+
+
 def _db_init():
-    with sqlite3.connect(DB_PATH) as con:
-        con.execute("""CREATE TABLE IF NOT EXISTS keys (
-            key      TEXT PRIMARY KEY,
-            expiry   TEXT NOT NULL,
-            name     TEXT NOT NULL DEFAULT ''
-        )""")
-        con.commit()
+    if _USE_PG:
+        con = _pg_conn()
+        try:
+            with con.cursor() as cur:
+                cur.execute("""CREATE TABLE IF NOT EXISTS keys (
+                    key    TEXT PRIMARY KEY,
+                    expiry TEXT NOT NULL,
+                    name   TEXT NOT NULL DEFAULT ''
+                )""")
+            con.commit()
+        finally:
+            con.close()
+    else:
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("""CREATE TABLE IF NOT EXISTS keys (
+                key      TEXT PRIMARY KEY,
+                expiry   TEXT NOT NULL,
+                name     TEXT NOT NULL DEFAULT ''
+            )""")
+            con.commit()
 
 
 def _db_save_key(key: str, expiry: datetime.datetime, name: str):
-    with sqlite3.connect(DB_PATH) as con:
-        con.execute(
-            "INSERT OR REPLACE INTO keys (key, expiry, name) VALUES (?, ?, ?)",
-            (key, expiry.isoformat(), name),
-        )
-        con.commit()
+    if _USE_PG:
+        con = _pg_conn()
+        try:
+            with con.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO keys (key, expiry, name) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (key) DO UPDATE SET expiry=EXCLUDED.expiry, name=EXCLUDED.name",
+                    (key, expiry.isoformat(), name),
+                )
+            con.commit()
+        finally:
+            con.close()
+    else:
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute(
+                "INSERT OR REPLACE INTO keys (key, expiry, name) VALUES (?, ?, ?)",
+                (key, expiry.isoformat(), name),
+            )
+            con.commit()
 
 
 def _db_delete_key(key: str):
-    with sqlite3.connect(DB_PATH) as con:
-        con.execute("DELETE FROM keys WHERE key = ?", (key,))
-        con.commit()
+    if _USE_PG:
+        con = _pg_conn()
+        try:
+            with con.cursor() as cur:
+                cur.execute("DELETE FROM keys WHERE key = %s", (key,))
+            con.commit()
+        finally:
+            con.close()
+    else:
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("DELETE FROM keys WHERE key = ?", (key,))
+            con.commit()
 
 
 def _db_purge_expired():
     now_iso = datetime.datetime.utcnow().isoformat()
-    with sqlite3.connect(DB_PATH) as con:
-        con.execute("DELETE FROM keys WHERE expiry <= ?", (now_iso,))
-        con.commit()
+    if _USE_PG:
+        con = _pg_conn()
+        try:
+            with con.cursor() as cur:
+                cur.execute("DELETE FROM keys WHERE expiry <= %s", (now_iso,))
+            con.commit()
+        finally:
+            con.close()
+    else:
+        with sqlite3.connect(DB_PATH) as con:
+            con.execute("DELETE FROM keys WHERE expiry <= ?", (now_iso,))
+            con.commit()
 
 
 def _db_load_keys():
-    """Load all non-expired keys from DB into VALID_KEYS on startup."""
+    """Load all non-expired keys from DB into VALID_KEYS."""
     _db_purge_expired()
-    with sqlite3.connect(DB_PATH) as con:
-        rows = con.execute("SELECT key, expiry, name FROM keys").fetchall()
+    if _USE_PG:
+        con = _pg_conn()
+        try:
+            with con.cursor() as cur:
+                cur.execute("SELECT key, expiry, name FROM keys")
+                rows = cur.fetchall()
+        finally:
+            con.close()
+    else:
+        with sqlite3.connect(DB_PATH) as con:
+            rows = con.execute("SELECT key, expiry, name FROM keys").fetchall()
+
     with _keys_lock:
         for key, expiry_iso, name in rows:
             try:
@@ -69,6 +137,35 @@ def _db_load_keys():
                 VALID_KEYS[key] = {"expiry": expiry, "name": name}
             except ValueError:
                 pass
+
+
+def _db_lookup_key(key: str):
+    """Check a single key directly in the DB (bypasses in-memory cache)."""
+    now_iso = datetime.datetime.utcnow().isoformat()
+    if _USE_PG:
+        con = _pg_conn()
+        try:
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT expiry, name FROM keys WHERE key = %s AND expiry > %s",
+                    (key, now_iso),
+                )
+                row = cur.fetchone()
+        finally:
+            con.close()
+    else:
+        with sqlite3.connect(DB_PATH) as con:
+            row = con.execute(
+                "SELECT expiry, name FROM keys WHERE key = ? AND expiry > ?",
+                (key, now_iso),
+            ).fetchone()
+
+    if not row:
+        return None
+    try:
+        return {"expiry": datetime.datetime.fromisoformat(row[0]), "name": row[1]}
+    except ValueError:
+        return None
 
 
 _db_init()
@@ -1593,14 +1690,23 @@ def login():
         now = datetime.datetime.utcnow()
         with _keys_lock:
             entry = VALID_KEYS.get(key)
-            if entry and entry["expiry"] > now:
-                session["authenticated"] = True
-                session["key"] = key
-                session.permanent = True
-                return redirect("/")
-            elif entry:
-                del VALID_KEYS[key]
-                _db_delete_key(key)
+
+        # If not in memory (e.g. after a restart), check the DB directly
+        if not entry:
+            entry = _db_lookup_key(key)
+            if entry:
+                with _keys_lock:
+                    VALID_KEYS[key] = entry   # re-cache it
+
+        if entry and entry["expiry"] > now:
+            session["authenticated"] = True
+            session["key"] = key
+            session.permanent = True
+            return redirect("/")
+        elif entry:
+            with _keys_lock:
+                VALID_KEYS.pop(key, None)
+            _db_delete_key(key)
 
         nonce_val = secrets.token_hex(16)
         session["login_nonce"] = nonce_val
